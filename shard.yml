@@ -1,10 +1,17 @@
 name: ldap-server
 version: 0.1.0
 
-description: Crystal LDAP server library
+description: |
+  Crystal library for building LDAP servers. Handles BER/ASN.1 framing,
+  message dispatch, and response encoding. Implement Handler#on_bind and
+  #on_search to back it with your own directory logic.
 
 authors:
   - Dirless <hello@dirless.io>
+
+homepage: https://github.com/dirless/ldap-server.cr
+
+source_url: https://github.com/dirless/ldap-server.cr
 
 license: MIT
 
