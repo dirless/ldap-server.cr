@@ -1,5 +1,7 @@
 # ldap-server.cr
 
+> **This shard was entirely written by [Claude](https://claude.ai) (Anthropic's AI assistant).**
+
 A Crystal shard for building LDAP servers. Handles the protocol layer (BER/ASN.1 framing, message dispatch, response encoding) so you can focus on directory logic.
 
 Built on top of [spider-gazelle/crystal-ldap](https://github.com/spider-gazelle/crystal-ldap), reusing its BER primitives, tag definitions, and filter infrastructure.
@@ -167,12 +169,32 @@ conn.closed?         # Bool
 | Search        | ✅ |
 | Unbind        | ✅ |
 | Abandon       | ✅ (no-op; requests are synchronous) |
-| Modify        | 🔜 returns UnwillingToPerform |
-| Add           | 🔜 returns UnwillingToPerform |
-| Delete        | 🔜 returns UnwillingToPerform |
-| Modify DN     | 🔜 returns UnwillingToPerform |
-| Compare       | 🔜 returns UnwillingToPerform |
-| StartTLS      | 🔜 planned |
+| StartTLS      | ✅ (pass a `OpenSSL::SSL::Context::Server` to `LDAP::Server.new`) |
+| Modify        | returns `UnwillingToPerform` |
+| Add           | returns `UnwillingToPerform` |
+| Delete        | returns `UnwillingToPerform` |
+| Modify DN     | returns `UnwillingToPerform` |
+| Compare       | returns `UnwillingToPerform` |
+
+## StartTLS
+
+Pass an `OpenSSL::SSL::Context::Server` to enable StartTLS (RFC 4511 §4.14). The connection starts as plain text; the client sends a StartTLS ExtendedRequest to upgrade:
+
+```crystal
+tls = OpenSSL::SSL::Context::Server.new
+tls.certificate_chain = "/etc/ldap/server.crt"
+tls.private_key       = "/etc/ldap/server.key"
+
+server = LDAP::Server.new(MyHandler.new, tls_context: tls, port: 389)
+server.listen
+```
+
+Test with ldapsearch:
+
+```sh
+ldapsearch -H ldap://localhost:389 -ZZ -x -b "dc=example,dc=com" "(uid=alice)"
+# -ZZ requires StartTLS to succeed
+```
 
 ## Running the specs
 

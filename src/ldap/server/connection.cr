@@ -1,4 +1,5 @@
 require "ldap"
+require "openssl"
 require "./filter"
 require "./handler"
 
@@ -18,7 +19,14 @@ module LDAP
       # The DN the client bound as (empty string for anonymous).
       property bound_dn : String = ""
 
-      def initialize(@socket : IO, @handler : Handler, @remote_address : Socket::Address? = nil)
+      START_TLS_OID = "1.3.6.1.4.1.1466.20037"
+
+      def initialize(
+        @socket : IO,
+        @handler : Handler,
+        @remote_address : Socket::Address? = nil,
+        @tls_context : OpenSSL::SSL::Context::Server? = nil
+      )
       end
 
       def closed? : Bool
@@ -68,6 +76,8 @@ module LDAP
           @socket.close
         when LDAP::Tag::AbandonRequest
           # nothing to do — we process requests synchronously
+        when LDAP::Tag::ExtendedRequest
+          handle_extended(msg_id, op)
         else
           response_tag = request_to_response_tag(tag)
           send_result(msg_id, response_tag, LDAP::Response::Code::UnwillingToPerform,
@@ -112,6 +122,34 @@ module LDAP
         end
 
         send_result(msg_id, LDAP::Tag::SearchResult, code)
+      end
+
+      # ── Extended operations ──────────────────────────────────────────────────
+
+      private def handle_extended(msg_id : Int32, op : LDAP::BER) : Nil
+        # requestName is Context-specific [0]; value is the OID bytes
+        oid = op.children.first?.try { |c| String.new(c.get_bytes) } || ""
+
+        case oid
+        when START_TLS_OID
+          tls = @tls_context
+          unless tls
+            send_result(msg_id, LDAP::Tag::ExtendedResponse,
+              LDAP::Response::Code::UnwillingToPerform,
+              error_message: "StartTLS not configured on this server")
+            return
+          end
+
+          # Respond with success before upgrading the socket
+          send_result(msg_id, LDAP::Tag::ExtendedResponse, LDAP::Response::Code::Success)
+
+          # Wrap the plain socket in TLS; handshake happens here
+          @socket = OpenSSL::SSL::Socket::Server.new(@socket, tls, sync_close: true)
+        else
+          send_result(msg_id, LDAP::Tag::ExtendedResponse,
+            LDAP::Response::Code::ProtocolError,
+            error_message: "unsupported extended operation: #{oid}")
+        end
       end
 
       # ── Response builders ───────────────────────────────────────────────────

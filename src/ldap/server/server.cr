@@ -29,7 +29,22 @@ module LDAP
     getter port : Int32
     getter host : String
 
+    # Create a plain-text LDAP server.
     def initialize(@handler : Handler, @host : String = "0.0.0.0", @port : Int32 = 389)
+      @tls_context = nil
+      @server = TCPServer.new(@host, @port)
+    end
+
+    # Create a server that supports StartTLS (RFC 4511 §4.14).
+    # Clients can upgrade an existing plain connection by sending a
+    # StartTLS ExtendedRequest; the TLS handshake then uses *tls_context*.
+    def initialize(
+      @handler : Handler,
+      tls_context : OpenSSL::SSL::Context::Server,
+      @host : String = "0.0.0.0",
+      @port : Int32 = 389
+    )
+      @tls_context = tls_context
       @server = TCPServer.new(@host, @port)
     end
 
@@ -51,7 +66,7 @@ module LDAP
     private def handle_client(socket : TCPSocket) : Nil
       remote = socket.remote_address rescue nil
       Log.debug { "client connected: #{remote}" }
-      conn = Connection.new(socket, @handler, remote)
+      conn = Connection.new(socket, @handler, remote, @tls_context)
       conn.run
       Log.debug { "client disconnected: #{remote}" }
     rescue e
