@@ -76,6 +76,16 @@ module LDAP
           @socket.close
         when LDAP::Tag::AbandonRequest
           # nothing to do — we process requests synchronously
+        when LDAP::Tag::AddRequest
+          handle_add(msg_id, op)
+        when LDAP::Tag::DeleteRequest
+          handle_delete(msg_id, op)
+        when LDAP::Tag::ModifyRequest
+          handle_modify(msg_id, op)
+        when LDAP::Tag::ModifyRDNRequest
+          handle_modify_dn(msg_id, op)
+        when LDAP::Tag::CompareRequest
+          handle_compare(msg_id, op)
         when LDAP::Tag::ExtendedRequest
           handle_extended(msg_id, op)
         else
@@ -122,6 +132,87 @@ module LDAP
         end
 
         send_result(msg_id, LDAP::Tag::SearchResult, code)
+      end
+
+      # ── Add ─────────────────────────────────────────────────────────────────
+
+      private def handle_add(msg_id : Int32, op : LDAP::BER) : Nil
+        ch = op.children
+        raise LDAP::Error.new("AddRequest needs 2 fields, got #{ch.size}") unless ch.size >= 2
+
+        dn = ch[0].get_string
+        attributes = Hash(String, Array(String)).new
+        ch[1].children.each do |attr_seq|
+          ac = attr_seq.children
+          next unless ac.size >= 2
+          name = ac[0].get_string
+          values = ac[1].children.map { |v| String.new(v.get_bytes) }
+          attributes[name] = values
+        end
+
+        code = @handler.on_add(dn, attributes, self)
+        send_result(msg_id, LDAP::Tag::AddResponse, code)
+      end
+
+      # ── Delete ───────────────────────────────────────────────────────────────
+
+      private def handle_delete(msg_id : Int32, op : LDAP::BER) : Nil
+        dn = String.new(op.get_bytes)
+        code = @handler.on_delete(dn, self)
+        send_result(msg_id, LDAP::Tag::DeleteResponse, code)
+      end
+
+      # ── Modify ───────────────────────────────────────────────────────────────
+
+      private def handle_modify(msg_id : Int32, op : LDAP::BER) : Nil
+        ch = op.children
+        raise LDAP::Error.new("ModifyRequest needs 2 fields, got #{ch.size}") unless ch.size >= 2
+
+        dn = ch[0].get_string
+        changes = ch[1].children.map do |change_seq|
+          cc = change_seq.children
+          raise LDAP::Error.new("change sequence needs 2 fields") unless cc.size >= 2
+          op_val = LDAP::ModifyOperation.from_value(cc[0].get_integer.to_i)
+          mod_ch = cc[1].children
+          raise LDAP::Error.new("modification needs 2 fields") unless mod_ch.size >= 2
+          attr = mod_ch[0].get_string
+          values = mod_ch[1].children.map { |v| String.new(v.get_bytes) }
+          LDAP::Server::Modification.new(op_val, attr, values)
+        end
+
+        code = @handler.on_modify(dn, changes, self)
+        send_result(msg_id, LDAP::Tag::ModifyResponse, code)
+      end
+
+      # ── ModifyDN ─────────────────────────────────────────────────────────────
+
+      private def handle_modify_dn(msg_id : Int32, op : LDAP::BER) : Nil
+        ch = op.children
+        raise LDAP::Error.new("ModifyDNRequest needs at least 3 fields, got #{ch.size}") unless ch.size >= 3
+
+        dn = ch[0].get_string
+        new_rdn = ch[1].get_string
+        delete_old_rdn = ch[2].get_boolean
+        new_superior = ch.size >= 4 ? String.new(ch[3].get_bytes) : nil
+
+        code = @handler.on_modify_dn(dn, new_rdn, delete_old_rdn, new_superior, self)
+        send_result(msg_id, LDAP::Tag::ModifyRDNResponse, code)
+      end
+
+      # ── Compare ──────────────────────────────────────────────────────────────
+
+      private def handle_compare(msg_id : Int32, op : LDAP::BER) : Nil
+        ch = op.children
+        raise LDAP::Error.new("CompareRequest needs 2 fields, got #{ch.size}") unless ch.size >= 2
+
+        dn = ch[0].get_string
+        ava = ch[1].children
+        raise LDAP::Error.new("AVA needs 2 fields, got #{ava.size}") unless ava.size >= 2
+        attribute = ava[0].get_string
+        value = String.new(ava[1].get_bytes)
+
+        code = @handler.on_compare(dn, attribute, value, self)
+        send_result(msg_id, LDAP::Tag::CompareResponse, code)
       end
 
       # ── Extended operations ──────────────────────────────────────────────────

@@ -19,7 +19,8 @@ crystal: ">= 1.9.0"
 
 dependencies:
   ldap:
-    github: spider-gazelle/crystal-ldap
+    github: dirless/crystal-ldap
+    branch: crud-operations
 
 development_dependencies:
   ameba:

@@ -66,6 +66,127 @@ class TestHandler < LDAP::Server::Handler
   end
 end
 
+# ── Mutable handler for CRUD tests ─────────────────────────────────────────────
+#
+# Each CRUD test gets its own fresh instance so mutations don't leak between tests.
+
+class MutableHandler < LDAP::Server::Handler
+  def initialize
+    @dir = Hash(String, Hash(String, Array(String))).new
+  end
+
+  def entries : Hash(String, Hash(String, Array(String)))
+    @dir
+  end
+
+  def on_bind(dn : String, password : String, conn : LDAP::Server::Connection) : LDAP::Response::Code
+    LDAP::Response::Code::Success
+  end
+
+  def on_search(
+    base : String,
+    scope : LDAP::SearchScope,
+    filter : LDAP::Server::Filter,
+    attrs : Array(String),
+    conn : LDAP::Server::Connection,
+    &block : LDAP::Server::SearchEntry ->
+  ) : LDAP::Response::Code
+    @dir.each do |dn, entry_attrs|
+      dl = dn.downcase; bl = base.downcase
+      in_scope = case scope
+                 when LDAP::SearchScope::BaseObject    then dl == bl
+                 when LDAP::SearchScope::SingleLevel   then dl.split(",", 2)[1]? == bl
+                 when LDAP::SearchScope::WholeSubtree  then dl == bl || dl.ends_with?(",#{bl}")
+                 else false
+                 end
+      next unless in_scope
+      next unless filter.matches?(dn, entry_attrs)
+      block.call LDAP::Server::SearchEntry.new(dn, entry_attrs)
+    end
+    LDAP::Response::Code::Success
+  end
+
+  def on_add(dn : String, attributes : Hash(String, Array(String)), conn : LDAP::Server::Connection) : LDAP::Response::Code
+    return LDAP::Response::Code::EntryAlreadyExists if @dir.has_key?(dn)
+    @dir[dn] = attributes
+    LDAP::Response::Code::Success
+  end
+
+  def on_delete(dn : String, conn : LDAP::Server::Connection) : LDAP::Response::Code
+    return LDAP::Response::Code::NoSuchObject unless @dir.has_key?(dn)
+    @dir.delete(dn)
+    LDAP::Response::Code::Success
+  end
+
+  def on_modify(dn : String, changes : Array(LDAP::Server::Modification), conn : LDAP::Server::Connection) : LDAP::Response::Code
+    entry = @dir[dn]?
+    return LDAP::Response::Code::NoSuchObject unless entry
+
+    changes.each do |mod|
+      case mod.operation
+      when LDAP::ModifyOperation::Add
+        existing = entry[mod.attribute]? || [] of String
+        entry[mod.attribute] = (existing + mod.values).uniq
+      when LDAP::ModifyOperation::Delete
+        if mod.values.empty?
+          entry.delete(mod.attribute)
+        else
+          existing = entry[mod.attribute]? || [] of String
+          entry[mod.attribute] = existing.reject { |v| mod.values.includes?(v) }
+        end
+      when LDAP::ModifyOperation::Replace
+        entry[mod.attribute] = mod.values
+      end
+    end
+    LDAP::Response::Code::Success
+  end
+
+  def on_modify_dn(dn : String, new_rdn : String, delete_old_rdn : Bool, new_superior : String?, conn : LDAP::Server::Connection) : LDAP::Response::Code
+    entry = @dir.delete(dn)
+    return LDAP::Response::Code::NoSuchObject unless entry
+
+    # Build new DN from new_rdn + parent (or new_superior)
+    parent = new_superior || dn.split(",", 2)[1]?
+    new_dn = parent ? "#{new_rdn},#{parent}" : new_rdn
+
+    # Update the RDN attribute in the entry
+    rdn_attr, rdn_val = new_rdn.split("=", 2)
+    if delete_old_rdn
+      old_rdn_attr, old_rdn_val = dn.split("=", 2).map(&.strip)
+      entry.delete(old_rdn_attr)
+    end
+    existing = entry[rdn_attr]? || [] of String
+    entry[rdn_attr] = (existing + [rdn_val]).uniq
+
+    @dir[new_dn] = entry
+    LDAP::Response::Code::Success
+  end
+
+  def on_compare(dn : String, attribute : String, value : String, conn : LDAP::Server::Connection) : LDAP::Response::Code
+    entry = @dir[dn]?
+    return LDAP::Response::Code::NoSuchObject unless entry
+    values = entry[attribute]?
+    return LDAP::Response::Code::NoSuchAttribute unless values
+    values.includes?(value) ? LDAP::Response::Code::CompareTrue : LDAP::Response::Code::CompareFalse
+  end
+end
+
+def with_mutable_client(port : Int32, &block : LDAP::Client, MutableHandler ->)
+  handler = MutableHandler.new
+  server = LDAP::Server.new(handler, port: port)
+  spawn server.listen
+  Fiber.yield
+  socket = TCPSocket.new("127.0.0.1", port)
+  client = LDAP::Client.new(socket)
+  client.authenticate("", "")
+  begin
+    block.call client, handler
+  ensure
+    client.close rescue nil
+    server.close rescue nil
+  end
+end
+
 # ── Extra handlers for specific lifecycle tests ────────────────────────────────
 
 class BoundStateHandler < LDAP::Server::Handler
@@ -394,6 +515,164 @@ describe "LDAP::Server (integration via crystal-ldap client)" do
     end
 
     server.close rescue nil
+    port += 1
+  end
+end
+
+# ── CRUD integration tests ─────────────────────────────────────────────────────
+
+describe "LDAP::Server CRUD operations" do
+  port = 14000
+
+  it "add creates a new entry" do
+    with_mutable_client(port) do |c, h|
+      c.add("cn=carol,dc=example,dc=com", {
+        "cn"          => ["Carol"],
+        "objectClass" => ["person"],
+      })
+      h.entries.has_key?("cn=carol,dc=example,dc=com").should be_true
+      h.entries["cn=carol,dc=example,dc=com"]["cn"].should eq ["Carol"]
+    end
+    port += 1
+  end
+
+  it "add returns EntryAlreadyExists for a duplicate DN" do
+    with_mutable_client(port) do |c, h|
+      attrs = {"cn" => ["Carol"], "objectClass" => ["person"]}
+      c.add("cn=carol,dc=example,dc=com", attrs)
+      expect_raises(LDAP::Client::WriteError, /EntryAlreadyExists/i) do
+        c.add("cn=carol,dc=example,dc=com", attrs)
+      end
+    end
+    port += 1
+  end
+
+  it "delete removes an existing entry" do
+    with_mutable_client(port) do |c, h|
+      c.add("cn=dave,dc=example,dc=com", {"cn" => ["Dave"], "objectClass" => ["person"]})
+      c.delete("cn=dave,dc=example,dc=com")
+      h.entries.has_key?("cn=dave,dc=example,dc=com").should be_false
+    end
+    port += 1
+  end
+
+  it "delete returns NoSuchObject for a missing DN" do
+    with_mutable_client(port) do |c, _|
+      expect_raises(LDAP::Client::WriteError, /NoSuchObject/i) do
+        c.delete("cn=nobody,dc=example,dc=com")
+      end
+    end
+    port += 1
+  end
+
+  it "modify replace changes attribute values" do
+    with_mutable_client(port) do |c, h|
+      c.add("cn=eve,dc=example,dc=com", {"cn" => ["Eve"], "mail" => ["old@example.com"], "objectClass" => ["person"]})
+      c.modify("cn=eve,dc=example,dc=com", [
+        {LDAP::ModifyOperation::Replace, "mail", ["new@example.com"]},
+      ])
+      h.entries["cn=eve,dc=example,dc=com"]["mail"].should eq ["new@example.com"]
+    end
+    port += 1
+  end
+
+  it "modify add appends new values to an attribute" do
+    with_mutable_client(port) do |c, h|
+      c.add("cn=frank,dc=example,dc=com", {"cn" => ["Frank"], "objectClass" => ["person"]})
+      c.modify("cn=frank,dc=example,dc=com", [
+        {LDAP::ModifyOperation::Add, "objectClass", ["inetOrgPerson"]},
+      ])
+      h.entries["cn=frank,dc=example,dc=com"]["objectClass"].should contain "inetOrgPerson"
+      h.entries["cn=frank,dc=example,dc=com"]["objectClass"].should contain "person"
+    end
+    port += 1
+  end
+
+  it "modify delete removes specific values from an attribute" do
+    with_mutable_client(port) do |c, h|
+      c.add("cn=grace,dc=example,dc=com", {"cn" => ["Grace"], "objectClass" => ["person", "inetOrgPerson"]})
+      c.modify("cn=grace,dc=example,dc=com", [
+        {LDAP::ModifyOperation::Delete, "objectClass", ["inetOrgPerson"]},
+      ])
+      h.entries["cn=grace,dc=example,dc=com"]["objectClass"].should eq ["person"]
+    end
+    port += 1
+  end
+
+  it "modify returns NoSuchObject for a missing DN" do
+    with_mutable_client(port) do |c, _|
+      expect_raises(LDAP::Client::WriteError, /NoSuchObject/i) do
+        c.modify("cn=nobody,dc=example,dc=com", [
+          {LDAP::ModifyOperation::Replace, "cn", ["X"]},
+        ])
+      end
+    end
+    port += 1
+  end
+
+  it "modify_dn renames an entry within the same parent" do
+    with_mutable_client(port) do |c, h|
+      c.add("cn=henry,dc=example,dc=com", {"cn" => ["Henry"], "objectClass" => ["person"]})
+      c.modify_dn("cn=henry,dc=example,dc=com", "cn=hank", true)
+      h.entries.has_key?("cn=henry,dc=example,dc=com").should be_false
+      h.entries.has_key?("cn=hank,dc=example,dc=com").should be_true
+      h.entries["cn=hank,dc=example,dc=com"]["cn"].should contain "hank"
+    end
+    port += 1
+  end
+
+  it "modify_dn moves an entry to a new superior" do
+    with_mutable_client(port) do |c, h|
+      c.add("cn=ivan,dc=example,dc=com", {"cn" => ["Ivan"], "objectClass" => ["person"]})
+      c.modify_dn("cn=ivan,dc=example,dc=com", "cn=ivan", true, "ou=staff,dc=example,dc=com")
+      h.entries.has_key?("cn=ivan,dc=example,dc=com").should be_false
+      h.entries.has_key?("cn=ivan,ou=staff,dc=example,dc=com").should be_true
+    end
+    port += 1
+  end
+
+  it "compare returns true when attribute value matches" do
+    with_mutable_client(port) do |c, _|
+      c.add("cn=judy,dc=example,dc=com", {"cn" => ["Judy"], "objectClass" => ["person"]})
+      c.compare("cn=judy,dc=example,dc=com", "cn", "Judy").should be_true
+    end
+    port += 1
+  end
+
+  it "compare returns false when attribute value does not match" do
+    with_mutable_client(port) do |c, _|
+      c.add("cn=karl,dc=example,dc=com", {"cn" => ["Karl"], "objectClass" => ["person"]})
+      c.compare("cn=karl,dc=example,dc=com", "cn", "NotKarl").should be_false
+    end
+    port += 1
+  end
+
+  it "compare raises on NoSuchObject" do
+    with_mutable_client(port) do |c, _|
+      expect_raises(LDAP::Client::WriteError, /NoSuchObject/i) do
+        c.compare("cn=nobody,dc=example,dc=com", "cn", "x")
+      end
+    end
+    port += 1
+  end
+
+  it "added entry is immediately searchable" do
+    with_mutable_client(port) do |c, _|
+      c.add("cn=lena,dc=example,dc=com", {"cn" => ["Lena"], "uid" => ["lena"], "objectClass" => ["person"]})
+      results = c.search("dc=example,dc=com", LDAP::Request::Filter.equal("uid", "lena"))
+      results.size.should eq 1
+      results.first["dn"].should eq ["cn=lena,dc=example,dc=com"]
+    end
+    port += 1
+  end
+
+  it "deleted entry no longer appears in search" do
+    with_mutable_client(port) do |c, _|
+      c.add("cn=mike,dc=example,dc=com", {"cn" => ["Mike"], "uid" => ["mike"], "objectClass" => ["person"]})
+      c.delete("cn=mike,dc=example,dc=com")
+      results = c.search("dc=example,dc=com", LDAP::Request::Filter.equal("uid", "mike"))
+      results.size.should eq 0
+    end
     port += 1
   end
 end
