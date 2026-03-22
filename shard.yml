@@ -1,0 +1,19 @@
+name: ldap-server
+version: 0.1.0
+
+description: Crystal LDAP server library
+
+authors:
+  - Dirless <hello@dirless.io>
+
+license: MIT
+
+crystal: ">= 1.9.0"
+
+dependencies:
+  ldap:
+    github: spider-gazelle/crystal-ldap
+
+development_dependencies:
+  ameba:
+    github: crystal-ameba/ameba

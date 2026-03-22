@@ -1,0 +1,7 @@
+name: promise
+version: 3.2.0
+crystal: ">= 1.1.1"
+
+development_dependencies:
+  ameba:
+    github: veelenga/ameba

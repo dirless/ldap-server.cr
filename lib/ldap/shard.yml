@@ -1,0 +1,13 @@
+name: ldap
+version: 0.9.1
+crystal: ">= 0.36.1"
+
+dependencies:
+  bindata:
+    github: spider-gazelle/bindata
+  promise:
+    github: spider-gazelle/promise
+
+development_dependencies:
+  ameba:
+    github: veelenga/ameba
