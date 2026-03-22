@@ -14,7 +14,7 @@ module LDAP
       getter remote_address : Socket::Address?
 
       # Whether the client has successfully authenticated.
-      property bound : Bool = false
+      property? bound : Bool = false
 
       # The DN the client bound as (empty string for anonymous).
       property bound_dn : String = ""
