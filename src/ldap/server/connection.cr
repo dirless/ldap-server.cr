@@ -81,7 +81,8 @@ module LDAP
         ch = op.children
         # BindRequest: { version (Integer), name (OctetString), auth (Choice) }
         dn = ch.size >= 2 ? ch[1].get_string : ""
-        password = ch.size >= 3 ? ch[2].get_string : ""
+        # password is Context-specific [0] (simple auth), not a Universal OctetString
+        password = ch.size >= 3 ? String.new(ch[2].get_bytes) : ""
 
         code = @handler.on_bind(dn, password, self)
 

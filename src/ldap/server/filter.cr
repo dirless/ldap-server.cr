@@ -27,8 +27,8 @@ module LDAP
         when 6 # lessOrEqual
           ch = ber.children
           LessOrEqual.new(ch[0].get_string, ch[1].get_string)
-        when 7 # present — primitive, attribute name is the value
-          Present.new(ber.get_string)
+        when 7 # present — Context-specific [7], value is the attribute name bytes
+          Present.new(String.new(ber.get_bytes))
         when 8 # approxMatch
           ch = ber.children
           Equality.new(ch[0].get_string, ch[1].get_string)
@@ -151,15 +151,17 @@ module LDAP
 
       private def self.parse_substring(ber : LDAP::BER) : Filter
         ch = ber.children
+        # attribute name is a Universal OctetString
         attr = ch[0].get_string
         initial = nil
         final = nil
         any = [] of String
+        # substring parts are Context-specific [0]=initial [1]=any [2]=final
         ch[1].children.each do |part|
           case part.tag_number
-          when 0 then initial = part.get_string
-          when 1 then any << part.get_string
-          when 2 then final = part.get_string
+          when 0 then initial = String.new(part.get_bytes)
+          when 1 then any << String.new(part.get_bytes)
+          when 2 then final = String.new(part.get_bytes)
           end
         end
         Substring.new(attr, initial, any, final)
