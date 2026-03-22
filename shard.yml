@@ -1,5 +1,5 @@
 name: ldap-server
-version: 0.1.0
+version: 0.3.0
 
 description: |
   Crystal library for building LDAP servers. Handles BER/ASN.1 framing,
@@ -20,7 +20,7 @@ crystal: ">= 1.9.0"
 dependencies:
   ldap:
     github: dirless/crystal-ldap
-    branch: crud-operations
+    version: "~> 0.10.0"
 
 development_dependencies:
   ameba:

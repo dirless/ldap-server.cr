@@ -25,7 +25,7 @@ module LDAP
         @socket : IO,
         @handler : Handler,
         @remote_address : Socket::Address? = nil,
-        @tls_context : OpenSSL::SSL::Context::Server? = nil
+        @tls_context : OpenSSL::SSL::Context::Server? = nil,
       )
       end
 
@@ -120,12 +120,12 @@ module LDAP
         ch = op.children
         raise LDAP::Error.new("SearchRequest needs 8 fields, got #{ch.size}") unless ch.size >= 8
 
-        base   = ch[0].get_string
-        scope  = LDAP::SearchScope.from_value(ch[1].get_integer.to_i32)
+        base = ch[0].get_string
+        scope = LDAP::SearchScope.from_value(ch[1].get_integer.to_i32)
         # ch[2] derefAliases — we pass through; ch[3] sizeLimit; ch[4] timeLimit
         # ch[5] typesOnly — ignored for now
         filter = LDAP::Server::Filter.from_ber(ch[6])
-        attrs  = ch[7].children.map(&.get_string)
+        attrs = ch[7].children.map(&.get_string)
 
         code = @handler.on_search(base, scope, filter, attrs, self) do |entry|
           send_search_entry(msg_id, entry.dn, entry.attributes, attrs)
@@ -250,7 +250,7 @@ module LDAP
         tag : LDAP::Tag,
         code : LDAP::Response::Code,
         matched_dn : String = "",
-        error_message : String = ""
+        error_message : String = "",
       ) : Nil
         result = LDAP.app_sequence({
           LDAP::BER.new.set_integer(code.value, LDAP::UniversalTags::Enumerated),
@@ -265,14 +265,14 @@ module LDAP
         msg_id : Int32,
         dn : String,
         all_attrs : Hash(String, Array(String)),
-        requested_attrs : Array(String)
+        requested_attrs : Array(String),
       ) : Nil
         # Empty or "*" means return all attributes.
         attrs_to_send = if requested_attrs.empty? || requested_attrs.includes?("*")
-          all_attrs
-        else
-          all_attrs.select { |k, _| requested_attrs.any? { |r| r.downcase == k.downcase } }
-        end
+                          all_attrs
+                        else
+                          all_attrs.select { |k, _| requested_attrs.any? { |r| r.downcase == k.downcase } }
+                        end
 
         attr_list = attrs_to_send.map do |name, values|
           value_set = LDAP.set(

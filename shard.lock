@@ -10,7 +10,7 @@ shards:
 
   ldap:
     git: https://github.com/dirless/crystal-ldap.git
-    version: 0.9.1+git.commit.43c303d5e56ade135d7286a4f6af6e6d791abfb5
+    version: 0.10.0
 
   promise:
     git: https://github.com/spider-gazelle/promise.git

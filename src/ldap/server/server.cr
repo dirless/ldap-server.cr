@@ -42,7 +42,7 @@ module LDAP
       @handler : Handler,
       tls_context : OpenSSL::SSL::Context::Server,
       @host : String = "0.0.0.0",
-      @port : Int32 = 389
+      @port : Int32 = 389,
     )
       @tls_context = tls_context
       @server = TCPServer.new(@host, @port)

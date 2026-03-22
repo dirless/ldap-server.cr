@@ -62,7 +62,7 @@ module LDAP
         new_rdn : String,
         delete_old_rdn : Bool,
         new_superior : String?,
-        conn : Connection
+        conn : Connection,
       ) : LDAP::Response::Code
         LDAP::Response::Code::UnwillingToPerform
       end

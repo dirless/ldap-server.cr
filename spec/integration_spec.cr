@@ -29,8 +29,7 @@ class TestHandler < LDAP::Server::Handler
   def on_bind(dn : String, password : String, conn : LDAP::Server::Connection) : LDAP::Response::Code
     return LDAP::Response::Code::Success if dn.empty? # anonymous bind always allowed
     expected = CREDENTIALS[dn]?
-    expected && expected == password ? LDAP::Response::Code::Success
-                                     : LDAP::Response::Code::InvalidCredentials
+    expected && expected == password ? LDAP::Response::Code::Success : LDAP::Response::Code::InvalidCredentials
   end
 
   def on_search(
@@ -94,10 +93,10 @@ class MutableHandler < LDAP::Server::Handler
     @dir.each do |dn, entry_attrs|
       dl = dn.downcase; bl = base.downcase
       in_scope = case scope
-                 when LDAP::SearchScope::BaseObject    then dl == bl
-                 when LDAP::SearchScope::SingleLevel   then dl.split(",", 2)[1]? == bl
-                 when LDAP::SearchScope::WholeSubtree  then dl == bl || dl.ends_with?(",#{bl}")
-                 else false
+                 when LDAP::SearchScope::BaseObject   then dl == bl
+                 when LDAP::SearchScope::SingleLevel  then dl.split(",", 2)[1]? == bl
+                 when LDAP::SearchScope::WholeSubtree then dl == bl || dl.ends_with?(",#{bl}")
+                 else                                      false
                  end
       next unless in_scope
       next unless filter.matches?(dn, entry_attrs)
@@ -194,8 +193,7 @@ class BoundStateHandler < LDAP::Server::Handler
   property captured_dn : String = ""
 
   def on_bind(dn : String, password : String, conn : LDAP::Server::Connection) : LDAP::Response::Code
-    dn == "cn=alice,dc=example,dc=com" && password == "alicepass" ?
-      LDAP::Response::Code::Success : LDAP::Response::Code::InvalidCredentials
+    dn == "cn=alice,dc=example,dc=com" && password == "alicepass" ? LDAP::Response::Code::Success : LDAP::Response::Code::InvalidCredentials
   end
 
   def on_search(base : String, scope : LDAP::SearchScope, filter : LDAP::Server::Filter,

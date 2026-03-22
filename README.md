@@ -4,15 +4,15 @@
 
 A Crystal shard for building LDAP servers. Handles the protocol layer (BER/ASN.1 framing, message dispatch, response encoding) so you can focus on directory logic.
 
-Built on top of [spider-gazelle/crystal-ldap](https://github.com/spider-gazelle/crystal-ldap), reusing its BER primitives, tag definitions, and filter infrastructure.
+Built on top of [crystal-ldap](https://github.com/dirless/crystal-ldap), reusing its BER primitives, tag definitions, and filter infrastructure.
 
 ## Features
 
 - TCP server with one fiber per client
-- Simple, abstract `Handler` class — implement `on_bind` and `on_search`
+- Simple, abstract `Handler` class — implement `on_bind` and `on_search`, optionally override CRUD methods
 - Full RFC 4511 filter tree parsed from BER (AND, OR, NOT, equality, substring, present, ≥, ≤) with optional in-memory `matches?`
-- Supports: Bind, Search, Unbind, Abandon; returns `UnwillingToPerform` for unimplemented operations
-- Works with any LDAP client (tested with [crystal-ldap](https://github.com/spider-gazelle/crystal-ldap), [ldapsearch](https://linux.die.net/man/1/ldapsearch))
+- Complete LDAP operation support: Bind, Search, Add, Delete, Modify, ModifyDN, Compare, Unbind, Abandon, StartTLS
+- Works with any LDAP client (tested with [crystal-ldap](https://github.com/dirless/crystal-ldap), [ldapsearch](https://linux.die.net/man/1/ldapsearch))
 
 ## Installation
 
@@ -32,13 +32,7 @@ Then run `shards install`.
 require "ldap-server"
 
 # In-memory directory
-ENTRIES = {
-  "cn=alice,dc=example,dc=com" => {
-    "cn"          => ["Alice"],
-    "uid"         => ["alice"],
-    "objectClass" => ["person"],
-  },
-}
+ENTRIES = Hash(String, Hash(String, Array(String))).new
 
 class MyHandler < LDAP::Server::Handler
   def on_bind(dn : String, password : String, conn : LDAP::Server::Connection) : LDAP::Response::Code
@@ -60,6 +54,18 @@ class MyHandler < LDAP::Server::Handler
       next unless filter.matches?(dn, entry_attrs)
       block.call LDAP::Server::SearchEntry.new(dn, entry_attrs)
     end
+    LDAP::Response::Code::Success
+  end
+
+  def on_add(dn : String, attributes : Hash(String, Array(String)), conn : LDAP::Server::Connection) : LDAP::Response::Code
+    return LDAP::Response::Code::EntryAlreadyExists if ENTRIES.has_key?(dn)
+    ENTRIES[dn] = attributes
+    LDAP::Response::Code::Success
+  end
+
+  def on_delete(dn : String, conn : LDAP::Server::Connection) : LDAP::Response::Code
+    return LDAP::Response::Code::NoSuchObject unless ENTRIES.has_key?(dn)
+    ENTRIES.delete(dn)
     LDAP::Response::Code::Success
   end
 end
@@ -88,15 +94,35 @@ The port is bound when the `Server` object is constructed (before `listen` is ca
 
 ### `LDAP::Server::Handler`
 
-Subclass and override:
+Subclass and override. `on_bind` and `on_search` are abstract (required); all other methods have sensible defaults (`UnwillingToPerform` for CRUD, no-op for unbind).
 
 ```crystal
 abstract class LDAP::Server::Handler
+  # ── Required ──────────────────────────────────────────────────────────
+
   # Return Success to accept the bind, or an error code to reject it.
   abstract def on_bind(dn, password, conn) : LDAP::Response::Code
 
   # Yield matching SearchEntry objects; return the final result code.
   abstract def on_search(base, scope, filter, attrs, conn, &block : SearchEntry ->) : LDAP::Response::Code
+
+  # ── Optional (override to enable) ────────────────────────────────────
+
+  # Add a new entry. Default: UnwillingToPerform.
+  def on_add(dn, attributes, conn) : LDAP::Response::Code
+
+  # Delete an entry. Default: UnwillingToPerform.
+  def on_delete(dn, conn) : LDAP::Response::Code
+
+  # Modify an entry's attributes. Default: UnwillingToPerform.
+  def on_modify(dn, changes : Array(Modification), conn) : LDAP::Response::Code
+
+  # Rename or move an entry. Default: UnwillingToPerform.
+  def on_modify_dn(dn, new_rdn, delete_old_rdn, new_superior, conn) : LDAP::Response::Code
+
+  # Compare an attribute value. Return CompareTrue or CompareFalse.
+  # Default: UnwillingToPerform.
+  def on_compare(dn, attribute, value, conn) : LDAP::Response::Code
 
   # Called on UnbindRequest or disconnect. Default is a no-op.
   def on_unbind(conn) : Nil
@@ -107,6 +133,17 @@ end
 
 ```crystal
 record SearchEntry, dn : String, attributes : Hash(String, Array(String))
+```
+
+#### `LDAP::Server::Modification`
+
+Passed to `on_modify` — one per change in the ModifyRequest:
+
+```crystal
+record Modification,
+  operation : LDAP::ModifyOperation,  # Add, Delete, or Replace
+  attribute : String,
+  values : Array(String)
 ```
 
 ### `LDAP::Server::Filter`
@@ -140,13 +177,16 @@ filter = LDAP::Server::Filter.from_ber(ber_node)
 
 ### `LDAP::Response::Code`
 
-Standard RFC 4511 result codes are available from the upstream `crystal-ldap` shard:
+Standard RFC 4511 result codes are available from the `crystal-ldap` shard:
 
 ```crystal
 LDAP::Response::Code::Success
 LDAP::Response::Code::InvalidCredentials
 LDAP::Response::Code::InsufficientAccessRights
 LDAP::Response::Code::NoSuchObject
+LDAP::Response::Code::EntryAlreadyExists
+LDAP::Response::Code::CompareTrue
+LDAP::Response::Code::CompareFalse
 # ... full list in LDAP::Response::Code enum
 ```
 
@@ -170,11 +210,11 @@ conn.closed?         # Bool
 | Unbind        | ✅ |
 | Abandon       | ✅ (no-op; requests are synchronous) |
 | StartTLS      | ✅ (pass a `OpenSSL::SSL::Context::Server` to `LDAP::Server.new`) |
-| Modify        | returns `UnwillingToPerform` |
-| Add           | returns `UnwillingToPerform` |
-| Delete        | returns `UnwillingToPerform` |
-| Modify DN     | returns `UnwillingToPerform` |
-| Compare       | returns `UnwillingToPerform` |
+| Add           | ✅ (override `on_add`) |
+| Delete        | ✅ (override `on_delete`) |
+| Modify        | ✅ (override `on_modify`) |
+| Modify DN     | ✅ (override `on_modify_dn`) |
+| Compare       | ✅ (override `on_compare`) |
 
 ## StartTLS
 

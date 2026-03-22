@@ -110,7 +110,7 @@ describe LDAP::Server::Filter do
   describe "GreaterOrEqual / LessOrEqual" do
     it "compares lexicographically" do
       ge = LDAP::Server::Filter::GreaterOrEqual.new("uid", "alice")
-      ge.matches?("cn=bob,dc=example", BOB).should be_true  # "bob" >= "alice"
+      ge.matches?("cn=bob,dc=example", BOB).should be_true # "bob" >= "alice"
 
       le = LDAP::Server::Filter::LessOrEqual.new("uid", "alice")
       le.matches?("cn=alice,dc=example", ALICE).should be_true
